@@ -1,0 +1,424 @@
+---
+title: "CarineTherond_A20_Examen_ASML2"
+author: "CarineTherond"
+date: "04/04/2021"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Exercise C - Statement
+
+Let consider data1 and data2.
+For data1, we want to explain the development while in data2, we want to explain the Grade.
+By considering the nature of the variables, create several models and give the best one.
+
+
+
+
+
+
+
+
+# Exercise C - Data1
+## Data1 overview
+We only have four kinds of individuals
+Each indidual is represented 3 times
+We can compute the Development mean value for each kind of individual
+```{r}
+library(tidyverse)
+setwd("D:/DocsDeCara/Boulot/Programmation/R/ScriptsCara/DSTI/CoursDSTI/ASML/ASML_Examen/")
+data1 = read.csv('data1.csv', header = TRUE, sep = ";")
+head(data1)
+count(data1, Treatment)
+count(data1, Psychologist)
+gp <- group_by(data1, Treatment, Psychologist)	
+summarise(gp, nb = n(), predict = mean(Development))	
+```
+
+## Dataset transformation
+Treatment and Psychologist looks like qualitative variables
+```{r}
+data1 = mutate(data1, 
+       Treatment2 = ifelse(data1$Treatment == "placebo", 1, 2))
+X = data1[c(5, 3)]
+X["Treatment2"] = as.factor(data1$Treatment2)
+X["Psychologist"] = as.factor(data1$Psychologist)
+head(X)
+Y = data1$Development
+head(Y)
+```
+
+## Try with linear regression ANOVA
+Lc is the full ANOVA multiplicative model and La is the full ANOVA additve model
+In both cases, the choice of reference cell has been performed to ensure that X matrix is of full rank (there is an intercept)
+
+In both cases, adjusted R-squared is very low: models are not good
+But there are very few data
+
+For Lc model, a residuals symmetry is visible inside first statistics output by summary
+For La model, the residuals symmetry is not convincing inside first statistics output by summary
+
+
+```{r}
+Lc = lm(Y ~ X[, 1]+X[, 2]+X[, 1]*X[, 2])
+Lc$rank
+summary(Lc)
+predict(Lc)
+
+La = lm(Y ~ X[, 1]+X[, 2])
+La$rank
+summary(La)
+predict(La)
+```
+## Analysis of Lc
+Residuals vs Fitted plot is sparse, but no bias on residuals is visible
+Normal Q-Q is not very convincing: residuals are maybe not gaussian
+
+Kolmogorov test on standardised residuals indicates that H0 is OK (gaussian noise)
+Then noise is gaussian, we can analysis all output given by summary or anova methods
+
+Third line of anova: multiplicative effect is to be ignored 
+because p-value is great enough (p-value : 0.54857) to accept H0
+```{r}
+plot(Lc)
+ks.test(rstandard(Lc), 'pnorm')
+
+anova(Lc)
+```
+
+## Analysis of La
+Residuals vs Fitted plot is sparse, but no bias on residuals is visible
+Normal Q-Q indicates that residuals are maybe gaussian
+
+Kolmogorov test on standardised residuals indicates that H0 is OK (gaussian noise)
+Then noise is gaussian, we can analysis all output given by summary or anova methods
+
+First line of anova: Treatment2 variable effect is significant (H0 rejected)
+Second line of anova: Psychologist variable effect can be ignored (H0 accepted)
+```{r}
+plot(La)
+ks.test(rstandard(La), 'pnorm')
+
+anova(La)
+```
+## Simple linear model selected
+I only keep the variable Treatment2
+Indeed Adjusted R-squared is better than previously
+
+Kolmogorov test indicates that H0 is OK (gaussian noise)
+Fisher test indicates that not all the coefficients are null (H0 rejected as p-value: 0.01464)
+
+```{r}
+L = lm(Y ~ X[, 1])
+summary(L)
+predict(L)
+
+ks.test(rstandard(L), 'pnorm')
+```
+
+
+## Try with tree
+Despite the parameters used, the tree is not maximum because there are 3 individuals in each leaves
+But as noticed on overview section, each kind of individuals is represented 3 times
+```{r}
+library(rpart)
+Tree = rpart(Y ~ X[, 1]+X[, 2], minsplit = 2, cp = 10^-9)
+Tree
+plot(Tree)
+text(Tree)
+```
+
+## Analysis of the tree
+Curve of cross validation error according to the tree size has not the usual form
+I decided to keep the tree with 2 leaves
+```{r}
+printcp(Tree)
+plotcp(Tree)
+
+prune(Tree, cp = 0.12)
+```
+## Simple tree model selected
+I choose cp between 0.12 and inf
+We can notice that only the data[,1] = Treatment2 variable is used to construct this tree
+```{r}
+T = rpart(Y ~ X[, 1]+X[, 2], minsplit = 2, cp = 0.2)
+T
+```
+
+
+## Comparison of models with bagging
+The simple linear model L is the best one
+- very often better than the additive model with the 2 variables, which confirms the previous analysis
+- when efficiency is similar to the additive model with the 2 variables, it is always a simpler model, so a better choice
+- better than both tree models, as indicated by mean and variance of bagging errors
+```{r}
+errTree = c()
+errL = c()
+errLa = c()
+errT = c()
+
+K = 10
+n = nrow(X)
+m = floor(2*n/3)
+u = 1:n
+
+for (i in 1:K){
+  
+  l = sample(u, m, replace = TRUE)
+  
+  Xlearning = X[l,]
+  Xtest = X[-l,]
+
+  Ylearning = Y[l]
+  Ytest = Y[-l]
+  
+  L = lm(Ylearning ~ ., data = Xlearning[1])
+  pL = predict(L, newdata = Xtest[1])
+  errL = c(errL, 1/nrow(Xtest)*sum((Ytest-pL)^2))
+
+  La = lm(Ylearning ~ ., data = Xlearning)
+  pLa = predict(La, newdata = Xtest)
+  errLa = c(errLa, 1/nrow(Xtest)*sum((Ytest-pLa)^2))
+
+  Tree = rpart(Ylearning ~ ., data = Xlearning, minsplit = 2, cp = 10^-9)
+  pTree = predict(Tree, newdata = Xtest)
+  errTree = c(errTree, 1/nrow(Xtest)*sum((Ytest-pTree)^2))
+
+  T = rpart(Ylearning ~ ., data = Xlearning, minsplit = 2, cp = 0.2)
+  pT = predict(T, newdata = Xtest)
+  errT = c(errT, 1/nrow(Xtest)*sum((Ytest-pT)^2))
+  
+}
+
+E = data.frame(error = c(errL, errLa, errTree, errT), model = rep(c("L", "La", "Tree", "T"), each = K))
+
+boxplot(E$error~E$model)
+```
+
+
+
+
+
+
+
+# Exercise C - Data2
+## Data2 overview
+All variables are numerical, of values very close: no scale issue
+```{r}
+library(tidyverse)
+setwd("D:/DocsDeCara/Boulot/Programmation/R/ScriptsCara/DSTI/CoursDSTI/ASML/ASML_Examen/")
+data2 = read.csv('data2.csv', header = TRUE, sep = ";")
+head(data2)
+summary(data2)	
+```
+## Dataset preparation
+```{r}
+X = data2[-c(1,6)]
+head(X)
+Y = data2$Grade
+head(Y)
+```
+## Try with linear model
+First I try with full model (without variables selection)
+Adjusted R-squared is not so high
+
+The residuals symmetry is not convincing inside first statistics output by summary
+
+Rank of the X matrix is 5, which means a full rank matrix (4 variables + intercept)
+```{r}
+Lc = lm(Y~., data = X)
+summary(Lc)
+Lc$rank
+```
+## Analysis of Lc
+Residuals vs Fitted plot indicates that residuals are linked to fitted values: homoscedaticity not accepted
+Normal Q-Q indicates that residuals are maybe gaussian
+
+Kolmogorov test on standardized residuals indicates that H0 is OK (gaussian noise)
+Then noise is gaussian, we can analysis all output given by summary method
+
+The Fisher test indicates that the model is not null (HO rejected as p-value: 0.00786)
+```{r}
+plot(Lc)
+ks.test(rstandard(Lc), 'pnorm')
+```
+## Try to improve homoscedaticity
+I tried different linear models to fit function of Y (functions inspired by BoxCox transformations)
+Homoscedaticity is not improved, so I keep Y as values to be fitted
+```{r}
+L1 = lm((log(Y))~., data = X)
+plot(L1, which = 1)
+
+L2 = lm((exp(Y))~., data = X)
+plot(L2, which = 1)
+
+L3 = lm((Y**2)~., data = X)
+plot(L3, which = 1)
+
+L4 = lm((Y**3)~., data = X)
+plot(L4, which = 1)
+
+L5 = lm((1/Y)~., data = X)
+plot(L5, which = 1)
+
+L6 = lm((1/(Y**2))~., data = X)
+plot(L6, which = 1)
+
+L7 = lm((1/(Y**3))~., data = X)
+plot(L7, which = 1)
+
+L8 = lm((sqrt(Y))~., data = X)
+plot(L8, which = 1)
+
+L9 = lm((1/sqrt(Y))~., data = X)
+plot(L9, which = 1)
+```
+
+## Variables selection with adjusted R2 criteria
+The best model is with only one variable: the second one, which is Acid
+```{r}
+library(leaps)                   
+sel_r2adj = leaps(X, Y, method = "adjr2", names = colnames(X)) 
+r2Evol = data.frame(Quality = sel_r2adj$adjr2, var_numb = sel_r2adj$size)
+boxplot(r2Evol$Quality~r2Evol$var_numb)
+
+sel_r2adj_nbest = leaps(X, Y, method = "adjr2", nbest = 1, names = colnames(X)) 
+sel_r2adj_nbest
+plot(min(sel_r2adj_nbest$size):max(sel_r2adj_nbest$size), sel_r2adj_nbest$adjr2)
+```
+
+## Variables selection with Fisher criteria
+The best model is also with only one variable, which is Acid
+It's true with backward or forward methods
+```{r}
+m0 <- lm(Y~1,data=X)
+mf <- lm(Y~.,data=X)
+sel_Fisher_f = step(m0, scope = list(lower=m0, upper=mf), data=X, direction="forward", test = 'F')
+sel_Fisher_f
+
+sel_Fisher_b = step(lm(Y~., data=X), test = 'F')
+sel_Fisher_b
+```
+## Variables selection with penalized regression, according to Lasso
+The best model is also with only one variable, which is Acid
+```{r}
+library(glmnet)
+#A real variable selection is performed
+sel_lasso = glmnet(as.matrix(X), Y, alpha = 1)
+plot(sel_lasso)
+
+#I try to identify the best lambda penalization term to use for variables selection
+sel_lasso.cv = cv.glmnet(as.matrix(X), Y, alpha = 1)
+sel_lasso.cv
+plot(sel_lasso.cv$cvm)
+ind_min = which(sel_lasso.cv$lambda == sel_lasso.cv$lambda.min)
+ind_1se = which(sel_lasso.cv$lambda == sel_lasso.cv$lambda.1se)    
+abline(v = ind_min, col = "red")
+abline(v = ind_1se, col = "green")
+abline(h = sel_lasso.cv$cvm[ind_min] + sel_lasso.cv$cvsd[ind_min], lty = 3)
+
+#The best lambda is 0.3676, I get the variable selected
+sel_lasso.best = glmnet(as.matrix(X), Y, aplpha = 1, lambda = sel_lasso.cv$lambda.1se)
+sel_lasso.best
+coef(sel_lasso.best)
+```
+## Simple linear model selected
+I only keep the variable Acid
+Indeed Adjusted R-squared is better than previously
+
+Residuals vs Fitted plot indicates that residuals are linked to fitted values: homoscedaticity not accepted
+Normal Q-Q indicates that residuals are maybe gaussian
+
+Kolmogorov test on standardized residuals indicates that H0 is OK (gaussian noise)
+Then noise is gaussian, we can analysis all output given by summary method
+
+The Fisher test indicates that the model is not null (HO rejected as p-value: 7.81e-05)
+
+```{r}
+L = lm(Y ~ Acid, data = X)
+plot(L)
+ks.test(rstandard(L), 'pnorm')
+
+summary(L)
+```
+## I try with tree
+The tree is maximum because in each of the 16 leaves, there is only one individual
+```{r}
+library(rpart)
+Tree = rpart(Y ~ ., data = X, minsplit = 2, cp = 10^-9)
+Tree
+plot(Tree)
+text(Tree)
+```
+
+## Pruning and selection of the best tree
+I choose to keep the tree with 2 leaves (error is under the 1se criteria)
+```{r}
+printcp(Tree)
+plotcp(Tree)
+
+prune(Tree, cp = 0.2)
+```
+## Simple tree model selected
+I choose cp between 1.2581e-01 (line 2 of printcp) and 6.4868e-01 (line 1 of printcp)
+We can notice that only the Acid variable is used to construct this tree
+```{r}
+T = rpart(Y ~ ., data = X, minsplit = 2, cp = 0.2)
+T
+```
+## Comparison of models with bagging
+The simple linear model L is the best one
+- very often better than the model using all variables, which confirms the previous analysis
+- when efficiency is similar to the model using all variables, it is always a simpler model, so a better choice
+- better than both tree models, as indicated by mean and variance of bagging errors 
+```{r}
+errLc = c()
+errL = c()
+errTree = c()
+errT = c()
+
+K = 10
+n = nrow(X)
+m = floor(2*n/3)
+u = 1:n
+
+for (i in 1:K){
+  
+  l = sample(u, m, replace = TRUE)
+  
+  Xlearning = X[l,]
+  Xtest = X[-l,]
+
+  Ylearning = Y[l]
+  Ytest = Y[-l]
+  
+  Lc = lm(Ylearning ~ ., data = Xlearning)
+  pLc = predict(Lc, newdata = Xtest)
+  errLc = c(errLc, 1/nrow(Xtest)*sum((Ytest-pLc)^2))
+
+  L = lm(Ylearning ~ Acid, data = Xlearning)
+  pL = predict(L, newdata = Xtest)
+  errL = c(errL, 1/nrow(Xtest)*sum((Ytest-pL)^2))
+
+  Tree = rpart(Ylearning ~ ., data = Xlearning, minsplit = 2, cp = 10^-9)
+  pTree = predict(Tree, newdata = Xtest)
+  errTree = c(errTree, 1/nrow(Xtest)*sum((Ytest-pTree)^2))
+
+  T = rpart(Ylearning ~ ., data = Xlearning, minsplit = 2, cp = 0.2)
+  pT = predict(T, newdata = Xtest)
+  errT = c(errT, 1/nrow(Xtest)*sum((Ytest-pT)^2))
+  
+}
+
+E = data.frame(error = c(errLc, errL, errTree, errT), model = rep(c("LC", "L", "Tree", "T"), each = K))
+
+boxplot(E$error~E$model)
+```
+
